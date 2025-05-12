@@ -3,20 +3,6 @@
 A Python-based Zero Trust compliance framework developed by **Ciaran O'Brien** for a Master's thesis in **Cybersecurity** at **Munster Technological University**.  
 This tool automates compliance assessments across hybrid environments — including **on-premises ESXi infrastructure** and **Microsoft Azure** — with over 27 controls aligned to Zero Trust Architecture (ZTA) principles.
 
----
-
-##  Table of Contents
-
-- [Project Purpose](#project-purpose)
-- [Features](#features)
-- [Technologies Used](#technologies-used)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Output](#output)
-- [Security Controls Checked](#security-controls-checked)
-- [License](#license)
-
----
 
 ## Project Purpose
 
@@ -51,12 +37,9 @@ This framework was created to support small and medium-sized enterprises (SMEs) 
 
 ---
 
-##  Installation
+##  Sample output
 
-### 1. Clone the repository
+A sample output can be seen in the atatched PDF file
 
-```bash
-git clone https://github.com/ciaranobrien/zero-trust-compliance.git
-cd zero-trust-compliance
 
 
