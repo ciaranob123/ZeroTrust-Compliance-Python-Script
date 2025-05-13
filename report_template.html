@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #f3f6fb;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(to bottom right, #f7f9fc, #e3e8f0);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .login-container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            width: 350px;
+            text-align: center;
+        }
+
+        .login-container img {
+            max-width: 120px;
+            margin-bottom: 20px;
+        }
+
+        h2 {
+            margin-bottom: 30px;
+            font-weight: normal;
+            letter-spacing: 2px;
+        }
+
+        input[type="email"],
+        input[type="password"] {
+            width: 100%;
+            padding: 12px 10px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #005b7f;
+            color: white;
+            font-size: 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 15px;
+        }
+
+        button:hover {
+            background-color: #004a66;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <img src="{{ url_for('static', filename='ese.png') }}" alt="ESE Logo">
+        <h2>LOGIN</h2>
+        <form action="/submit" method="POST">
+            <input type="email" name="email" placeholder="Email" required>
+            <input type="password" name="password" placeholder="Password" required>
+            <button type="submit">LOGIN</button>
+        </form>
+    </div>
+</body>
+</html>
