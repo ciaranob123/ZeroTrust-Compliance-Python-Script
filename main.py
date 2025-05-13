@@ -11,7 +11,7 @@ import json
 
 
 AZ_PATH = r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
-SUBSCRIPTION_ID = "Enter your Subscription ID here"
+SUBSCRIPTION_ID = "38915259-0faa-4784-a49a-5b4fcd1ef2b6"
 config = pdfkit.configuration(wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe")
 
 def az_cli_login(subscription_id):
@@ -34,7 +34,6 @@ def build_detailed_findings(scan_results):
         <p><b>Check:</b> {result['check']}</p>
         <p><b>Result:</b> {result['status']} - {result['comments']}</p>
         """
-
         if result.get('details'):
             findings_html += "<p><b>Details:</b></p><table border='1' cellpadding='3' cellspacing='0'>"
             for key, value in result['details'].items():
@@ -95,6 +94,68 @@ def check_ssh_restricted(client):
     print(detailed_info)
     return score, detailed_info
 
+def check_ssh_tcp_forwarding(client):
+    detailed_info = {}
+    score = 5
+
+    stdin, stdout, stderr = client.exec_command("cat /etc/ssh/sshd_config |grep '^AllowTcpForwarding'")
+    output = stdout.read().decode().strip()
+
+    if output:
+        value = output.split()[1].lower()
+        detailed_info["AllowTcpForwarding"] = value
+        if value == "no":
+            detailed_info["Status"] = "Enabled (Non-compliant)"
+        else:
+            detailed_info["Status"] = "Disabled (Compliant)"
+            score = 0
+    else:
+        score = 0
+        detailed_info["AllowTcpForwarding"] = "Not Set"
+
+    print(detailed_info)
+    return score, detailed_info
+
+
+def check_ssh_banner(client):
+    detailed_info = {}
+    score = 5
+
+    stdin, stdout, stderr = client.exec_command("cat /etc/issue")
+    output = stdout.read().decode().strip()
+
+    if output:
+        detailed_info["Enabled"] = "Yes"
+        detailed_info["Banner Content"] = output
+    else:
+        score = 0
+        detailed_info["Enabled"] = "No"
+        detailed_info["Banner Content"] = "No content found in /etc/issue"
+    print(detailed_info)
+    return score, detailed_info
+
+
+
+def check_dcui_shell_access(client):
+
+    detailed_info = {}
+    score = 5
+    stdin, stdout, stderr = client.exec_command("grep '^dcui' /etc/passwd")
+    output = stdout.read().decode().strip()
+
+
+    fields = output.split(":")
+    login_shell = fields[-1]
+    detailed_info["dcui_shell"] = login_shell
+
+    if login_shell in ["/bin/false", "/sbin/nologin"]:
+        score = 5
+        detailed_info["dcui_shell_access"] = "Disabled"
+    else:
+        score = 0
+        detailed_info["dcui_shell_access"] = "Enabled"
+
+    return score, detailed_info
 
 
 
@@ -401,7 +462,7 @@ def check_user_roles():
             print(f"{principal_name} has {role} on {scope}")
 
 def check_subscription_owners():
-    score=10
+    score=6
     detailed_info={"Username", "Role"}
     print("\nChecks if there are owners count assigned to subscription")
 
@@ -429,7 +490,7 @@ def check_subscription_owners():
 def check_users_group_membership(limit=5):
     print("\nChecking if users are members of too many groups")
     detailed_info = {"Username": "Group Memberships"}
-    score = 10
+    score = 6
 
     result = subprocess.run(
         [AZ_PATH, "ad", "user", "list", "--query", "[].{Name:displayName, UPN:userPrincipalName}", "--output", "json"],
@@ -468,7 +529,7 @@ def check_users_group_membership(limit=5):
 
 #---------Checks Backups-------
 def check_vm_backup_azure():
-    score = 10
+    score = 5
     detailed_info = {"VM Name / Resource Group ": "Backup Vault Name"}
 
     result = subprocess.run(
@@ -536,7 +597,7 @@ def check_vms_encryption():
 
 def check_vnet_encryption(vnets):
     detailed_info={"VNET Resource":"Encryption Status"}
-    score = 10
+    score = 8
     print("\nChecking VNet Encryption...")
 
     for vnet in vnets:
@@ -624,7 +685,7 @@ def get_vnets():
 
 def check_vm_nsg_port_restrictions():
     print("\nChecking if VMs have unrestricted inbound ports via NSG\n")
-    score = 10
+    score = 12
     detailed_info = {"VM Name / NSG": "Open Port / Source"}
 
     nic_result = subprocess.run(
@@ -676,7 +737,7 @@ def check_vm_nsg_port_restrictions():
 def check_vnet_segmentation(vnets):
     print("\nChecking if vNets are segmented")
     ip_range= []
-    score=10
+    score=12
 
     detailed_info={"Name":"Address"}
     if len(vnets) < 2:
@@ -716,7 +777,7 @@ def check_vnet_segmentation(vnets):
 
 def check_nsg_rules():
     print("\nChecking NSGs for overly permissive rules...")
-    score=0
+    score=8
     detailed_info={"NSG Name": "Rule/Destination"}
     result = subprocess.run(
         [AZ_PATH, "network", "nsg", "list", "--output", "json"],
@@ -742,7 +803,7 @@ def check_nsg_rules():
 
 def check_azure_bastion():
     print("\nChecking for Azure Bastion deployments...")
-    score =0
+    score =11
     detailed_info= {"Bastion Name":"Location"}
     result = subprocess.run(
         [AZ_PATH, "network", "bastion", "list", "--output", "json"],
@@ -754,7 +815,7 @@ def check_azure_bastion():
         for bastion in bastions:
             detailed_info[bastion.get('name')]= bastion.get('location')
             print(f"Bastion host found: {bastion.get('name')} in {bastion.get('location')}")
-            score = 10
+
     else:
         print("Warning - No Azure Bastion hosts found. Secure access may be missing.")
         score=0
@@ -763,7 +824,7 @@ def check_azure_bastion():
 
 
 def check_azure_backup_snapshots():
-    score = 10
+    score = 2
     detailed_info={"VM Name/Resource Group":"Snapshot Ststus / Name"}
     print("\nChecking if vms are backed up ...")
     result = subprocess.run(
@@ -797,9 +858,9 @@ def check_azure_backup_snapshots():
                 break
         detailed_info[f"{name} : {rg}"] = f"{snapshot_exists} :{snapshot_name}"
         if snapshot_exists:
-            print(f"Backup exists for {name} : {rg}")
+            print(f"Snapchot exists for {name} : {rg}")
         else:
-            print(f"Backup found for {name} : {rg}")
+            print(f"Snapshot found for {name} : {rg}")
             score=0
 
     return score, detailed_info
@@ -807,7 +868,7 @@ def check_azure_backup_snapshots():
 def check_azure_Firewall ():
     print("\nChecking for Azure Firewall deployments...")
     detailed_info = {"Name": "Location"}
-    score=0
+    score=5
     result = subprocess.run(
         [AZ_PATH, "network", "firewall", "list", "--output", "json"],
         capture_output=True, text=True, check=True
@@ -818,7 +879,7 @@ def check_azure_Firewall ():
         for firewall in firewalls:
             detailed_info[firewall.get('name')]= firewall.get('location')
             print(f"Firewall host found: {firewall.get('name')} in {firewall.get('location')}")
-            score = 10
+
     else:
         print("Warning - No Azure Firewall hosts found. Deploy immediately.")
         score = 0
@@ -826,7 +887,7 @@ def check_azure_Firewall ():
     return score, detailed_info
 
 def check_public_ips_on_vms():
-    score = 10
+    score = 7
     detailed_info={"Resource Name:":"IP address / Resource Group"}
     print("\nChecking for public IP addresses on virtual machines...")
 
@@ -925,6 +986,9 @@ def main():
                     ("Check SSH Access Restrictions", "Checks if specified users are added to ssh config file to ensure least privilege access", check_ssh_restricted(client)),
                     ("VM Snapshot Availability", "Checks if VM's have snapshots", check_vm_snapshots(client)),
                     ("SSH Root Login", "PermitRootLogin check", check_root_ssh_login(client)),
+                    ("DCUI Shell Access", "Verifies if the DCUI account's shell access is disabled", check_dcui_shell_access(client)),
+                    ("SSH Banner Content", "Verifies a SSH Banner is set to detter attackers", check_ssh_banner(client)),
+                    ("SSH TCP Forwarding", "Checks if SSH TCP forwarding is disabled in the sshd_config file", check_ssh_tcp_forwarding(client)),
                     ("ESXI Host Password Complexity Policy", "Checks if password complexity polices are set on host. ", check_esxi_password_policies(client)),
                     ("ESXI Host Password Expiration Policy", "Checks password expiration policy. ", check_esxi_password_expiration(client))
 
@@ -999,12 +1063,6 @@ def main():
 
     compliance_percent = round((actual_score / total_possible_score_esxi) * 100, 2)
     compliance_percent_azure = round((azure_actual_score / total_possible_score_azure) * 100, 2)
-
-
-   # total_actual_score = actual_score + azure_actual_score
-    #total_possible_score = total_possible_score_esxi + total_possible_score_azure
-   # total_compliance_percent = round((total_actual_score / total_possible_score) * 100, 2)
-
 
     #print(compliance_percent)
     scan_date = datetime.now().strftime("%Y-%m-%d")
