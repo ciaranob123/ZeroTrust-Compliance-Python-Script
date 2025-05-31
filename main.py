@@ -1,5 +1,7 @@
 import csv
 from datetime import datetime
+from multiprocessing.reduction import duplicate
+
 import paramiko
 from pyVim import connect
 from pyVmomi import vim
@@ -8,16 +10,18 @@ import re
 import pdfkit
 import subprocess
 import json
-
+import smtplib
+from email.message import EmailMessage
 
 AZ_PATH = r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
-SUBSCRIPTION_ID = "38915259-0faa-4784-a49a-5b4fcd1ef2b6"
+SUBSCRIPTION_ID = "ENTER SUBSCRIPTION ID HERE"
 config = pdfkit.configuration(wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe")
 
-def az_cli_login(subscription_id):
-    subprocess.run([AZ_PATH, "login"], check=True)
-    subprocess.run([AZ_PATH, "account", "set", "--subscription", subscription_id], check=True)
 
+
+
+#--------------SCRIPT OPERATION FUNCTIONS------------------
+#https://apitemplate.io/blog/how-to-generate-pdfs-from-html-with-python-pdfkit/
 def generate_pdf_html(html_content, output_pdf_path):
     pdfkit.from_string(html_content, output_pdf_path, configuration=config)
 
@@ -25,7 +29,11 @@ def load_html_template(filepath):
     with open(filepath, "r", encoding="utf-8") as file:
         return file.read()
 
-
+'''
+Builds table that stores the details findings for each check. Loops through the scan results and extracts the list elements. 
+The detailed results are score in the list as a dictionary. 
+Function returns the HTML table code
+'''
 def build_detailed_findings(scan_results):
     findings_html = ""
     for result in scan_results:
@@ -47,7 +55,10 @@ def build_detailed_findings(scan_results):
 
 
 
-
+'''
+Builds the table for the summary section of the report
+Scan results are passed in as a list and it creates a HTML table and returns it. 
+'''
 def build_table_rows(scan_results):
     table_html = ""
     for result in scan_results:
@@ -61,6 +72,9 @@ def build_table_rows(scan_results):
         """
     return table_html
 
+'''
+Reads a CVS files that contains ESXI host details. Loops through each line and adds it to a list. 
+'''
 def load_credentials(filename):
     credentials = []
     with open(filename, newline='', encoding='utf-8') as file:
@@ -69,11 +83,45 @@ def load_credentials(filename):
             credentials.append((row['host'], row['username'], row['password']))
     return credentials
 
+
+'''
+Used for running SSH commands
+'''
 def run_command(client, command):
     stdin, stdout, stderr = client.exec_command(command)
     return stdout.read().decode(), stderr.read().decode()
 
-#=================== ESXi Check Functions ===================#
+
+
+
+'''
+Creates an email with the give inputs and attaches the specified file. Uses EmailMessage libarary to then send the email
+https://medium.com/@abdullahzulfiqar653/sending-emails-with-attachments-using-python-32b908909d73
+'''
+def send_email_with_report(sender_email, app_password, recipient_email, subject, body, attachment_path):
+
+    msg = EmailMessage()
+    msg["From"] = sender_email
+    msg["To"] = recipient_email
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    with open(attachment_path, "rb") as f:
+        pdf_data = f.read()
+        msg.add_attachment(pdf_data, maintype="application", subtype="pdf", filename="Hybrid-Cloud-ZTA-Report.pdf")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(sender_email, app_password)
+        smtp.send_message(msg)
+
+    print("email sent .")
+
+#------------------------ ESXi Check Functions ----------------------#
+
+'''
+Checks if SSH access is restricted on the ESXi host. 
+Queries the sshd_config file to check if "AllowedUsers" is present. Indicating that access is restricted
+'''
+
 def check_ssh_restricted(client):
     output, _ = run_command(client, "cat /etc/ssh/sshd_config")
     lines = output.splitlines()
@@ -86,17 +134,21 @@ def check_ssh_restricted(client):
             users = line.split()[1:]
             for user in users:
                 detailed_info[user] = "Allowed"
-            score = 8
+            score = 6
             break
 
     if score == 0:
         detailed_info["AllowUsers"] = "Not set — SSH unrestricted"
+
     print(detailed_info)
     return score, detailed_info
 
+'''
+Queries the sshd_config file on the ESXi host to check if TCP forwarding is disabled, as per recommendations
+'''
 def check_ssh_tcp_forwarding(client):
     detailed_info = {}
-    score = 5
+    score = 6
 
     stdin, stdout, stderr = client.exec_command("cat /etc/ssh/sshd_config |grep '^AllowTcpForwarding'")
     output = stdout.read().decode().strip()
@@ -117,9 +169,13 @@ def check_ssh_tcp_forwarding(client):
     return score, detailed_info
 
 
+'''
+Checks if a SSH Banner is enabled, used to deter attacker. 
+
+'''
 def check_ssh_banner(client):
     detailed_info = {}
-    score = 5
+    score = 4
 
     stdin, stdout, stderr = client.exec_command("cat /etc/issue")
     output = stdout.read().decode().strip()
@@ -136,8 +192,11 @@ def check_ssh_banner(client):
 
 
 
-def check_dcui_shell_access(client):
+'''
+Queries the /etc/passwd file and checks of the DCUI account has shell access disabled as reccommended 
+'''
 
+def check_dcui_shell_access(client):
     detailed_info = {}
     score = 5
     stdin, stdout, stderr = client.exec_command("grep '^dcui' /etc/passwd")
@@ -149,7 +208,7 @@ def check_dcui_shell_access(client):
     detailed_info["dcui_shell"] = login_shell
 
     if login_shell in ["/bin/false", "/sbin/nologin"]:
-        score = 5
+
         detailed_info["dcui_shell_access"] = "Disabled"
     else:
         score = 0
@@ -159,44 +218,63 @@ def check_dcui_shell_access(client):
 
 
 
-
+'''
+Extracts the portgroup information via the SDK and determines if port groups have the same VLAN ID. 
+Same VLAN ID's suggested that workloads are not segmenetd .
+'''
 def check_esxi_host_segmentation(host_obj):
-    score = 0
+    score = 7
     pg_vlan_map = {}
-    #detailed_info = ["Port Group : VLAN"]
     detailed_info= {}
     detailed_info["Port Group"]= "VLAN ID"
     for pg in host_obj.config.network.portgroup:
         vlan = pg.spec.vlanId
         pg_name = pg.spec.name
         detailed_info[pg_name]=vlan
-        #pg_vlan = f"{pg_name}:{vlan}"
-        #detailed_info.append(pg_vlan)
 
         if vlan in pg_vlan_map:
             pg_vlan_map[vlan].append(pg_name)
         else:
             pg_vlan_map[vlan] = [pg_name]
     print(detailed_info)
-    duplicates_found = any(len(groups) > 1 for groups in pg_vlan_map.values())
 
-    if not duplicates_found:
-        score += 15
+    duplicates_found=False
+    for groups in pg_vlan_map.values():
+        if len(groups) > 1:
+            duplicates_found=True
+
+    #duplicates_found = any(len(groups) > 1 for groups in pg_vlan_map.values())
+
+    if duplicates_found:
+        score =0
     return score, detailed_info
 
+
+'''
+Checks if lockdown mode is set to either normal or strict mode using the host object returned by the SDK. 
+
+'''
+
 def check_lockdown_mode(host_obj):
-    detailed_results= {}
+    detailed_results = {}
+    score = 6
+
     lockdown_mode = getattr(host_obj.config, "lockdownMode", None)
     detailed_results["Lockdown Mode"] = lockdown_mode
-    #print(detailed_results)
     print(lockdown_mode)
-    if lockdown_mode == "lockdownNormal" or "lockdownStrict":
-        return 6, detailed_results
-    return 0 , detailed_results
+
+    if lockdown_mode not in ("lockdownNormal", "lockdownStrict"):
+        score = 0
+
+    return score, detailed_results
 
 
+'''
+Using the SDK, it queries the list of running services on the host. The test fails if the SSH and Shell access are enabled
+Returns a list of all running services on the scannned ESXI hsot. 
+'''
 def check_host_services(host_obj):
-    score = 0
+    score = 7
     detailed_results= {"Service":"Status"}
     try:
         service_system = host_obj.configManager.serviceSystem
@@ -206,69 +284,86 @@ def check_host_services(host_obj):
         print(detailed_results)
         statuses = {s.key: s.running for s in services}
 
-        if not statuses.get("TSM-SSH", True) and not statuses.get("TSM-ESXiShell", True):
-            score += 10
+        if statuses.get("TSM-SSH", True) and statuses.get("TSM-ESXiShell", True):
+            score = 0
     except Exception:
         pass
     return score, detailed_results
 
-
+'''
+Checks that ESXI host is running the latest build, ensuring there is no vulnerabilities 
+'''
 
 def check_esxi_version_sdk(host_obj):
-
+    score=8
     latest_build = "24585291"
     build = host_obj.summary.config.product.build
     detailed_info = {"ESXi Host Build Number": build, "Latest ESXI Build":latest_build}
 
     print(detailed_info)
-    if build == latest_build:
-        return 5, detailed_info
-    return 0, detailed_info
+    if build != latest_build:
+        score =0
+    return score , detailed_info
 
 
+'''
+Pulls the operating systems versions from the ESXI host and compares it to a list of 
+unsupported operating systems
+'''
 def get_vm_os_info(content):
     unsupported_os_versions = [
         "Windows 2000", "Windows XP", "Windows Vista", "Windows 7",
         "Windows Server 2003", "Windows Server 2008", "Ubuntu 10.04 LTS",
         "Ubuntu 12.04 LTS", "CentOS 5", "CentOS 6", "Red Hat Enterprise Linux 5", "Debian 7"
     ]
-    score = 4
+    score = 6
     detailed_info={"Operating System": "Supported Status"}
     container = content.viewManager.CreateContainerView(content.rootFolder, [vim.VirtualMachine], True)
     vms = container.view
     for vm in vms:
         guest_os = vm.summary.config.guestFullName
 
-        if any(unsupported in guest_os for unsupported in unsupported_os_versions):
+        if guest_os in unsupported_os_versions:
             detailed_info[guest_os] = "Unsupported"
-            score =0
+            score = 0
         else:
-            detailed_info[guest_os]= "Supported"
+            detailed_info[guest_os] = "Supported"
     container.Destroy()
     print(detailed_info)
     return score, detailed_info
 
+
+'''
+Extracts the each VM's encryption status by accessing the vmEncryptionInfo field in VM config.
+Check fails if any VM is not encrypted 
+'''
 def check_all_vm_encryption(host_obj):
     vms = get_all_vms(host_obj)
-    detailed_info ={"VM Name": "Encryption Status"}
-    score = 12
+    detailed_info = {}
+    score = 8
+
     for vm in vms:
-        encrypted, _ = check_vm_encryption(vm)
-        detailed_info[vm.config.name]= encrypted
+        try:
+            enc_info = vm.config.vmEncryptionInfo
+            encrypted = bool(enc_info)
+        except Exception:
+            encrypted = False
+
+
+        if encrypted:
+            detailed_info[vm.config.name] = "Encrypted"
+        else:
+            detailed_info[vm.config.name] = "Not Encrypted"
+
+
+
         if not encrypted:
-            score =0
+            score = 0  # if any VM is not encrypted, set score to 0
+
     print(detailed_info)
     return score, detailed_info
 
-def check_vm_encryption(vm):
-    try:
-        #print(vm.config.name)
 
-        enc_info = vm.config.vmEncryptionInfo
-
-        return bool(enc_info), enc_info
-    except Exception:
-        return False, None
 
 def get_all_vms(entity):
     if hasattr(entity, 'rootFolder'):
@@ -284,11 +379,19 @@ def get_all_vms(entity):
     else:
         raise TypeError("Unsupported entity type passed to get_all_vms")
 
+
+# SSH Based ESXi Functions
+
+'''
+Used esxclid to query the permissions list for users. 
+The test fails if the user user has full access to the host and not part of allowed list.
+'''
+
 def list_esxi_permissions(client):
     output, _ = run_command(client, "esxcli system permission list")
     print(output)
     authorized = ["root", "administrator", "vpxuser", "dcui", "AliceJohnson"]
-    score = 8
+    score = 7
     detailed_info={"User": "Access Level"}
     lines = output.splitlines()[2:]
     for line in lines:
@@ -305,41 +408,50 @@ def list_esxi_permissions(client):
     print(detailed_info)
     return score, detailed_info
 
+
+'''
+Uses esxcli to retrieve the syslog cofig. Test fails if a remote log server is not configured
+'''
 def check_log_forwarding(client):
     output, _ = run_command(client, "esxcli system syslog config get")
     detailed_info = {}
-    score=0
-    ip=""
+    score = 0
+    ip = ""
+
     for line in output.splitlines():
         if "Remote Host" in line:
             log_hosts_value = line.split(":", 1)[1].strip()
-
-            ip = log_hosts_value.split()[0]  # Take the first part
-            print(f"Found Log Server: {ip}")
-
-            detailed_info={"Syslog Forwarding":"True", "Log Server IP": ip}
-            score=8
+            if log_hosts_value:
+                ip = log_hosts_value.split()[0]
+                print(f"Found Log Server: {ip}")
+                detailed_info = {"Syslog Forwarding": "True", "Log Server IP": ip}
+                score = 3
+            else:
+                detailed_info = {"Syslog Forwarding": "False", "Log Server IP": "None"}
             break
-        else:
-            score=0
 
-    #print(detailed_info)
+    if not detailed_info:
+        detailed_info = {"Syslog Forwarding": "False", "Log Server IP": "None"}
+
     return score, detailed_info
+
 
 def check_firewall(client):
     output, _ = run_command(client, "esxcli network firewall get")
     detailed_info = {}
+    score=4
 
     if "Enabled: true" in output:
         detailed_info["Firewall Status"] = "Enabled"
-        return 10, detailed_info
+
     else:
         detailed_info["Firewall Status"] = "Disabled"
-        return 0, detailed_info
+        score=0
+    return score,detailed_info
 
 def check_esxi_password_expiration(client):
     output, _ = run_command(client, "cat /etc/shadow")
-    score = 2
+    score = 6
     detailed_info = {"Username": "Password Expires after x days"}
     lines = output.splitlines()
     for line in lines:
@@ -358,9 +470,10 @@ def check_esxi_password_expiration(client):
 
     print(detailed_info)
     return score, detailed_info
+
 def check_esxi_password_policies(client):
     output, _ = run_command(client, "grep -E 'pam_pwquality.so|pam_cracklib.so|pam_passwdqc.so' /etc/pam.d/passwd")
-    score = 2
+    score = 5
     detailed_info = {"Password Complexity Status":"Required Password Length"}
 
     for line in output.strip().splitlines():
@@ -385,18 +498,20 @@ def check_esxi_password_policies(client):
 def check_root_ssh_login(client):
     output, _ = run_command(client, "grep '^PermitRootLogin' /etc/ssh/sshd_config")
     detailed_info = {}
+    score = 6
 
     if "no" in output.lower():
         detailed_info["SSH Root Login"] = "Disabled"
-        return 5, detailed_info
+
     else:
         detailed_info["SSH Root Login"] = "Enabled"
-        return 0, detailed_info
+        score =0
+    return score, detailed_info
 
 def check_vm_snapshots(client):
     output, _ = run_command(client, "vim-cmd vmsvc/getallvms")
     detailed_info = {"VM Name":"Snapshot Name"}
-    score =5
+    score =6
     lines = output.strip().splitlines()
 
     for line in lines[1:]:
@@ -409,7 +524,7 @@ def check_vm_snapshots(client):
         snap_output, _ = run_command(client, f"vim-cmd vmsvc/snapshot.get {vmid}")
         if "No snapshots" in snap_output:
             detailed_info["VM Snapshots"].append(f"{vmname}: No snapshots")
-            score -= 2
+            score =0
         else:
             detailed_info[vmname]="Snapshots Found"
 
@@ -419,7 +534,6 @@ def check_vm_snapshots(client):
 #----------------------------AZURE FUNCTION------------------------------------------------------
 
 
-
 def az_cli_login(subscription_id):
     subprocess.run([AZ_PATH, "login"], check=True)
     subprocess.run([AZ_PATH, "account", "set", "--subscription", subscription_id], check=True)
@@ -427,6 +541,8 @@ def az_cli_login(subscription_id):
 
 
 #-------------Identity Management Functions-----------------
+
+'''
 def list_users_roles_and_permissions():
     print("\nUsers and Permissions")
     users_result = subprocess.run([AZ_PATH, "ad", "user", "list", "--output", "json"],
@@ -441,7 +557,8 @@ def list_users_roles_and_permissions():
 
 
     print(user_dict)
-
+'''
+'''
 # check is owner role is assigned to any user
 def check_user_roles():
 
@@ -460,14 +577,15 @@ def check_user_roles():
             print(f"Over-privileged role: {principal_name} has Owner on {scope}")
         else:
             print(f"{principal_name} has {role} on {scope}")
+'''
+
 
 def check_subscription_owners():
-    score=6
+    score=7
     detailed_info={"Username", "Role"}
     print("\nChecks if there are owners count assigned to subscription")
 
     detailed_info = {"Username":"Admin Role"}
-
 
     result = subprocess.run(
         [AZ_PATH, "role", "assignment", "list", "--all","--output", "json","--query", f"[?roleDefinitionName=='Owner' && scope=='/subscriptions/{SUBSCRIPTION_ID}'].[principalName, principalType, roleDefinitionName]"],
@@ -490,7 +608,7 @@ def check_subscription_owners():
 def check_users_group_membership(limit=5):
     print("\nChecking if users are members of too many groups")
     detailed_info = {"Username": "Group Memberships"}
-    score = 6
+    score = 7
 
     result = subprocess.run(
         [AZ_PATH, "ad", "user", "list", "--query", "[].{Name:displayName, UPN:userPrincipalName}", "--output", "json"],
@@ -529,7 +647,7 @@ def check_users_group_membership(limit=5):
 
 #---------Checks Backups-------
 def check_vm_backup_azure():
-    score = 5
+    score = 8
     detailed_info = {"VM Name / Resource Group ": "Backup Vault Name"}
 
     result = subprocess.run(
@@ -567,7 +685,7 @@ def check_vm_backup_azure():
 
 
 def check_vms_encryption():
-    score=10
+    score=8
     detailed_info={}
     result = subprocess.run([AZ_PATH, "vm", "list", "--output", "json"],
         capture_output=True, text=True, check=True  #capturs output as string
@@ -597,7 +715,7 @@ def check_vms_encryption():
 
 def check_vnet_encryption(vnets):
     detailed_info={"VNET Resource":"Encryption Status"}
-    score = 8
+    score = 7
     print("\nChecking VNet Encryption...")
 
     for vnet in vnets:
@@ -632,7 +750,7 @@ def check_vnet_encryption(vnets):
 
 def check_key_vault_encryption():
     print("\nChecking Key Vault access and encryption...")
-    score = 10
+    score = 6
     detailed_info = {}
     result = subprocess.run([AZ_PATH, "keyvault", "list", "--output", "json"],
         capture_output=True, text=True, check=True
@@ -663,7 +781,7 @@ def check_key_vault_encryption():
             detailed_info["RBAC Status"] = enable_rbac
             detailed_info["Soft Delete name"] = soft_delete
             detailed_info["Purge Proetction"] = purge_protection
-            score = 10
+
         else:
             score=0
 
@@ -674,7 +792,7 @@ def check_key_vault_encryption():
 
     #print(detailed_info)
     return score, detailed_info
-#-------------Segmentation Functions-----------------
+
 def get_vnets():
     result = subprocess.run([AZ_PATH, "network", "vnet", "list", "--output", "json"],
         capture_output=True,
@@ -685,7 +803,7 @@ def get_vnets():
 
 def check_vm_nsg_port_restrictions():
     print("\nChecking if VMs have unrestricted inbound ports via NSG\n")
-    score = 12
+    score = 7
     detailed_info = {"VM Name / NSG": "Open Port / Source"}
 
     nic_result = subprocess.run(
@@ -735,40 +853,42 @@ def check_vm_nsg_port_restrictions():
 
 
 def check_vnet_segmentation(vnets):
-    print("\nChecking if vNets are segmented")
-    ip_range= []
-    score=12
+    print("\nChecking if vNets are segmented...")
+    score = 7
+    ip_ranges = {}
+    detailed_info = {"Name": "Address"}
 
-    detailed_info={"Name":"Address"}
     if len(vnets) < 2:
-        score= 0
+        return 0, {"Error": "Less than 2 VNets provided. Consider segmenting workloads if necessary."}
 
     for vnet in vnets:
-
         vnet_name = vnet.get("name")
-        address_space = vnet.get("addressSpace", {}).get("addressPrefixes")
-        address_space_str = ", ".join(address_space)
-        ip_range.append(address_space_str)
-        detailed_info[vnet_name]= address_space
-        print(f"{vnet_name} : {address_space}")
+        address_space = vnet.get("addressSpace", {}).get("addressPrefixes", [])
+        detailed_info[vnet_name] = address_space
+        print(f"{vnet_name}: {address_space}")
 
-        #add code to check if vnets are segmented.
+        for prefix in address_space:
+            if prefix in ip_ranges:
+                print(f"Address space conflict: {prefix} used in both {ip_ranges[prefix]} and {vnet_name}")
+                score = 0
+                detailed_info["Conflict"] = f"{prefix} used in {ip_ranges[prefix]} and {vnet_name}"
+            else:
+                ip_ranges[prefix] = vnet_name
 
         subnets = vnet.get("subnets", [])
         if subnets:
-            print("Subnets:")
+            print("  Subnets:")
             for subnet in subnets:
                 subnet_name = subnet.get("name")
-
                 subnet_addresses = subnet.get("addressPrefixes", [])
-                detailed_info[subnet_name]= subnet_addresses
-             # If there's at least one address range, display the first one; otherwise, indicate not found.
+                detailed_info[subnet_name] = subnet_addresses
                 if subnet_addresses:
                     print(f"    {subnet_name}: {subnet_addresses[0]}")
                 else:
                     print(f"    {subnet_name}: No address range found")
         else:
             print("  No subnets found.")
+
     return score, detailed_info
 
 
@@ -777,8 +897,10 @@ def check_vnet_segmentation(vnets):
 
 def check_nsg_rules():
     print("\nChecking NSGs for overly permissive rules...")
-    score=8
-    detailed_info={"NSG Name": "Rule/Destination"}
+    score = 7
+    insecure_found = False
+    detailed_info = {}
+
     result = subprocess.run(
         [AZ_PATH, "network", "nsg", "list", "--output", "json"],
         capture_output=True, text=True, check=True
@@ -788,22 +910,43 @@ def check_nsg_rules():
     for nsg in nsgs:
         nsg_name = nsg.get("name")
         for rule in nsg.get("securityRules", []):
-            dest = rule.get("destinationAddressPrefix")
-            detailed_info[nsg_name]= f"{rule} "
-            if dest == "0.0.0.0/0" and rule.get("access") == "Allow":
-                print(f"Warning - NSG '{nsg_name}' has insecure rule: {rule.get('name')} allows all traffic!")
-                score=0
+            access = rule.get("access")
+            proto = rule.get("protocol")
+            src = rule.get("sourceAddressPrefix", "")
+            dest = rule.get("destinationAddressPrefix", "")
+            name= rule.get('name')
+            if src == "*" or src == "0.0.0.0/0":
+                is_any_src = True
+            else:
+                is_any_src = False
+
+            if dest == "*" or  dest == "0.0.0.0/0":
+                is_any_dest = True
+            else:
+                is_any_des= False
+
+            rule_summary = f"{name} | Src: {src} | Dest: {dest} | Proto: {proto} | Access: {access}"
+            if nsg_name not in detailed_info:
+                detailed_info[nsg_name] = []
+
+            detailed_info[nsg_name].append(rule_summary)
+
+            if access == "Allow" and is_any_src and is_any_dest:
+                print(f"Insecure rule in NSG '{nsg_name}': {rule_summary}")
+                insecure_found = True
             else:
                 print(f"NSG '{nsg_name}' rule '{rule.get('name')}' is scoped properly.")
-                score=10
-    print(detailed_info)
+
+    if insecure_found:
+        score = 0
+
     return score, detailed_info
 
 
 
 def check_azure_bastion():
     print("\nChecking for Azure Bastion deployments...")
-    score =11
+    score =8
     detailed_info= {"Bastion Name":"Location"}
     result = subprocess.run(
         [AZ_PATH, "network", "bastion", "list", "--output", "json"],
@@ -824,7 +967,7 @@ def check_azure_bastion():
 
 
 def check_azure_backup_snapshots():
-    score = 2
+    score = 8
     detailed_info={"VM Name/Resource Group":"Snapshot Ststus / Name"}
     print("\nChecking if vms are backed up ...")
     result = subprocess.run(
@@ -865,10 +1008,44 @@ def check_azure_backup_snapshots():
 
     return score, detailed_info
 
+
+def check_user_roles():
+
+    print("\nChecking User Role Assignments...")
+    score = 7
+    detailed_info = {}
+
+    result = subprocess.run(
+        [AZ_PATH, "role", "assignment", "list", "--output", "json"],
+        capture_output=True, text=True, check=True
+    )
+    assignments = json.loads(result.stdout)
+
+    for assignment in assignments:
+        principal_name = assignment.get("principalName")
+        role = assignment.get("roleDefinitionName")
+        scope = assignment.get("scope")
+
+        if role.lower() == "owner":
+            detailed_info[principal_name] = f"Owner on {scope}"
+
+            if scope.count('/') > 2:
+                print(f"Over-privileged: {principal_name} has Owner on nested scope: {scope}")
+                score = 0
+            else:
+                print(f"{principal_name} has Owner on subscription: {scope}")
+        else:
+            print(f"{principal_name} has {role} on {scope}")
+
+    return score, detailed_info
+
+
+
+
 def check_azure_Firewall ():
     print("\nChecking for Azure Firewall deployments...")
     detailed_info = {"Name": "Location"}
-    score=5
+    score=6
     result = subprocess.run(
         [AZ_PATH, "network", "firewall", "list", "--output", "json"],
         capture_output=True, text=True, check=True
@@ -891,7 +1068,6 @@ def check_public_ips_on_vms():
     detailed_info={"Resource Name:":"IP address / Resource Group"}
     print("\nChecking for public IP addresses on virtual machines...")
 
-    # Get list of all public IP addresses
     result = subprocess.run(
         [AZ_PATH, "network", "public-ip", "list", "--output", "json"],
         capture_output=True, text=True, check=True
@@ -912,7 +1088,7 @@ def check_public_ips_on_vms():
         detailed_info[ip_name] = f"{ip_address} : {resource_group}"
         if assigned:
             found = True
-            print(f"Warning - Public IP in use: {ip_name} ({ip_address}) in {resource_group}")
+            print(f"Public IP in use: {ip_name} ({ip_address}) in {resource_group}")
             score =0
         else:
             print(f" Unassigned public IP: {ip_name} ({ip_address}) in {resource_group}")
@@ -1032,22 +1208,23 @@ def main():
     score_fw, fw_details = check_azure_Firewall()
     score_group_membership, membership_details = check_users_group_membership()
     score_snap, snap_details= check_azure_backup_snapshots()
-    #check_user_roles()
+    score_permissive_owners, permissive_owners_details= check_user_roles()
     #list_users_roles_and_permissions()
 
     azure_checks = [
         ("Network Segmentation", "Check if VNets are segmented", score_vnet_seg, vnet_details),
         ("NSG Rules", "Check for overly permissive NSG rules", score_nsg, nsg_details),
-        ("Public IP Exposure", "Check for public IPs assigned to resources", score_public_ips, public_ip_details),
-        ("Azure Bastion", "Check if Azure Bastion is deployed for secure access", score_bastion, bastion_details),
-        ("VNet Encryption", "Check if VNets and peerings have encryption enabled", score_vnets, vnets_details),
-        ("VM Inbound NSG Rules", "Chekcs if VM's have service ports open for all inbound IP addresses", score_inbound_nsg_vm, vm_nsg_details),
-        ("VM Encryption", "Check if VMs have encryption at host enabled", score_vm_encryption, vm_encryption_details),
-        ("Key Vault Security", "Check Key Vault RBAC, Soft Delete, and Purge Protection", score_kv, kv_details),
-        ("Azure Firewall", "Check if Azure Firewall is deployed for perimeter security", score_fw, fw_details),
-        ("Azure Snapshots", "Checks if snapshots are taken of VM's", score_snap, snap_details),
         ("Azure Backups", "Checks if Azure backups are configured for VM's", score_backups, backups_details),
-        ("Subsctiption Owners", "Checks the number of owners on the subscription, Microsoft reccomends less than 3", score_owners, owners_details),
+        ("VM Encryption", "Check if VMs have encryption at host enabled", score_vm_encryption, vm_encryption_details),
+        ("Public IP Exposure", "Check for public IPs assigned to resources", score_public_ips, public_ip_details),
+        ("Azure Firewall", "Check if Azure Firewall is deployed for perimeter security", score_fw, fw_details),
+        ("Azure Bastion", "Check if Azure Bastion is deployed for secure access", score_bastion, bastion_details),
+        ("Over permissive Owne Role", "Checks if Owner role is assigned outside the subscription scope",score_permissive_owners, permissive_owners_details),
+        ("Key Vault Security", "Check Key Vault RBAC, Soft Delete, and Purge Protection", score_kv, kv_details),
+        ("VM Inbound NSG Rules", "Checks if VM's have service ports open for all inbound IP addresses",score_inbound_nsg_vm, vm_nsg_details),
+        ("Azure Snapshots", "Checks if snapshots are taken of VM's", score_snap, snap_details),
+        ("VNet Encryption", "Check if VNets and peerings have encryption enabled", score_vnets, vnets_details),
+        ("Subsctiption Owners", "Checks the number of owners on the subscription, Microsoft recommends less than 3",score_owners, owners_details),
         ("Group Membership", "Check if users belong to too many groups", score_group_membership, membership_details)
     ]
 
@@ -1086,7 +1263,17 @@ def main():
                                 .replace("{{ compliance_percent }}", str(compliance_percent))
 
     generate_pdf_html(html_filled, pdf_filename)
-    print(f"\nreport generated: {pdf_filename}")
+    print(f"report generated: {pdf_filename}")
+
+    send_email_with_report(
+        sender_email="obrienciaran4@gmail.com",
+        app_password="btuhojyekirqrksx",
+        recipient_email="ciaran.obrien4@mycit.ie",
+        subject=f"Zero Trust Security Report - {scan_date}",
+        body="Please find attached the latest Zero Trust compliance report.",
+        attachment_path="Hybrid-Cloud-ZTA-Report.pdf"
+    )
+
 
 if __name__ == '__main__':
     main()
