@@ -435,6 +435,9 @@ def check_log_forwarding(client):
 
     return score, detailed_info
 
+'''
+Checks if the local ESXi firewall is enabled
+'''
 
 def check_firewall(client):
     output, _ = run_command(client, "esxcli network firewall get")
@@ -448,6 +451,10 @@ def check_firewall(client):
         detailed_info["Firewall Status"] = "Disabled"
         score=0
     return score,detailed_info
+
+'''
+Verifies the acount password expiration periods from the shadow file on ESXi host, test fails if there is no expiration set
+'''
 
 def check_esxi_password_expiration(client):
     output, _ = run_command(client, "cat /etc/shadow")
@@ -471,6 +478,10 @@ def check_esxi_password_expiration(client):
     print(detailed_info)
     return score, detailed_info
 
+
+'''
+Check's password complexity congiguration from the pam.d/passwd file. If minimium password less than 12, test fails. 
+'''
 def check_esxi_password_policies(client):
     output, _ = run_command(client, "grep -E 'pam_pwquality.so|pam_cracklib.so|pam_passwdqc.so' /etc/pam.d/passwd")
     score = 5
@@ -494,7 +505,7 @@ def check_esxi_password_policies(client):
 
     return score,detailed_info
 
-
+# Checks the sshd config file and looks to see if SSH login restrcitions are added for root user. 
 def check_root_ssh_login(client):
     output, _ = run_command(client, "grep '^PermitRootLogin' /etc/ssh/sshd_config")
     detailed_info = {}
@@ -508,6 +519,9 @@ def check_root_ssh_login(client):
         score =0
     return score, detailed_info
 
+
+
+# verifies if there
 def check_vm_snapshots(client):
     output, _ = run_command(client, "vim-cmd vmsvc/getallvms")
     detailed_info = {"VM Name":"Snapshot Name"}
