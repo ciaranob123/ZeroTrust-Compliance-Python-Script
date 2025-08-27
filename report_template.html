@@ -2,76 +2,237 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Login</title>
+    <title>Zero Trust Scan Report</title>
     <style>
         body {
-            margin: 0;
-            padding: 0;
-            background: #f3f6fb;
-            font-family: Arial, sans-serif;
-            background: linear-gradient(to bottom right, #f7f9fc, #e3e8f0);
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            font-family: Verdana, sans-serif;
+            margin: 20px;
+            #background-color: #fafafa;
+            color: #333;
         }
-
-        .login-container {
-            background-color: white;
-            padding: 40px;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-            width: 350px;
+        header {
             text-align: center;
-        }
-
-        .login-container img {
-            max-width: 120px;
-            margin-bottom: 20px;
-        }
-
-        h2 {
             margin-bottom: 30px;
-            font-weight: normal;
-            letter-spacing: 2px;
         }
-
-        input[type="email"],
-        input[type="password"] {
+        header h1 {
+            font-size: 24px;
+            margin: 5px 0;
+        }
+        header p {
+            font-size: 13px;
+            margin: 0;
+            color: #666;
+        }
+        section {
+            margin-bottom: 60px;
+        }
+        h2 {
+            font-size: 18px;
+            border-bottom: 1px solid #aaa;
+            padding-bottom: 4px;
+            margin-bottom: 5px;
+        }
+        table {
             width: 100%;
-            padding: 12px 10px;
-            margin: 10px 0;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            font-size: 16px;
+            border: 1px solid #ddd;
+            margin-top: 10px;
+            background-color: #fff;
         }
-
-        button {
-            width: 100%;
-            padding: 12px;
-            background-color: #005b7f;
-            color: white;
-            font-size: 16px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            margin-top: 15px;
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
         }
-
-        button:hover {
-            background-color: #004a66;
+        th {
+            #background-color: #f9f9f9;
+        }
+        footer {
+            text-align: center;
+            font-size: 11px;
+            color: #888;
+            margin-top: 40px;
         }
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <img src="{{ url_for('static', filename='ese.png') }}" alt="ESE Logo">
-        <h2>LOGIN</h2>
-        <form action="/submit" method="POST">
-            <input type="email" name="email" placeholder="Email" required>
-            <input type="password" name="password" placeholder="Password" required>
-            <button type="submit">LOGIN</button>
-        </form>
-    </div>
+
+<header>
+    <h1>Zero Trust Scan Report</h1>
+    <h1>On Premises EXSi Environment</h1>
+    <p>Scan Date: {{ scan_date }}</p>
+    <p>Host: {{ hostIP }}</p>
+</header>
+
+<section>
+    <h2>Information</h2>
+    <p>
+        Below are the scan results from the on premises ESXi host(s) analysis. The script performs a number of check to ensure that the infrastructure aligns with the main principle of Zero Trust Architecture. The script verifies the following:
+        <ul>
+          <li>Network Segmentation</li>
+          <li>Encryption of VM's</li>
+          <li>SSH and Shell Access</li>
+          <li>Lockdown Mode Status</li>
+          <li>ESXi Version Complaince</li>
+          <li>VM operating System versions</li>
+          <li>Firewall ststus</li>
+          <li>more</li>
+        </ul>
+
+    </p>
+</section>
+
+<section>
+    <h2>Scan Overview</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Resource</th>
+                <th>Check</th>
+                <th>Status</th>
+                <th>Notes</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ table_rows }}
+        </tbody>
+    </table>
+    <h3>Complaince Percent = {{ compliance_percent }} / 100</h3>
+</section>
+
+<section>
+    <h2>Detailed Information</h2>
+    <p>
+    {{ detailed_findings }}
+    </p>
+</section>
+
+<section>
+  <h2>Recommendations</h2>
+  <p>
+    Some areas passed, while others may need attention. Maintaining ESXi security under Zero Trust requires ongoing validation. Based on current scan results, the following improvements are recommended:
+  </p>
+  <ul>
+    <li>Ensure VM encryption is enabled to protect data at rest.</li>
+    <li>Verify ESXi VLAN segmentation to prevent lateral movement between environments.</li>
+    <li>Restrict SSH access to authorized users only using the <code>AllowUsers</code> directive.</li>
+    <li>Ensure SSH banners are configured to display legal warning messages.</li>
+    <li>Enable and forward logs to a central syslog server for auditing and incident response.</li>
+    <li>Ensure firewall service is running and unnecessary services like SLPD and SSH are disabled when not in use.</li>
+    <li>Check that all ESXi hosts are running supported versions with recent security patches.</li>
+    <li>Verify strong password complexity policies are in place and account lockout settings are enforced.</li>
+    <li>Ensure DCUI and root shell access are properly restricted to reduce local attack surface.</li>
+  </ul>
+</section>
+
+
+
 </body>
+
+
+
+
+
+
+
+
+
+<head>
+
+</head>
+<body>
+
+
+
+
+
+
+
+
+<div style="page-break-before: always;"></div>
+
+
+<header>
+    <h1>Azure Security Report </h1>
+    <p>Scan Date: {{ scan_date }}</p>
+    <p>Azure Subscription: {{ subscription }}</p>
+</header>
+
+<section>
+    <h2>Information</h2>
+   <p>
+        Below are the scan results from the Azure Cloud Environment analysis. The script performs a number of check to ensure that the cloud infrastructure aligns with the main principle of Zero Trust Architecture. The script verifies the following:
+        <ul>
+          <li>Network Segmentation</li>
+          <li>Encryption of VM's</li>
+          <li>Evaluates Network Security Groups</li>
+          <li>Verifies whether Azure Backups are enabled</li>
+          <li>Checks for exposed via public IPs</li>
+          <li>Reviews deployment of Azure Firewall and Azure Bastion</li>
+          <li>Assesses role assignments</li>
+          <li>Checks whether VMs have inbound service ports open</li>
+          <li>Checks if VNet encryption is enabled</li>
+          <li>Analyzes group memberships</li>
+          <li>Confirms that the number of subscription owners</li>
+
+        </ul>
+
+    </p>
+</section>
+
+<section>
+    <h2>Scan Overview</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Resource</th>
+                <th>Check</th>
+                <th>Status</th>
+                <th>Notes</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ table_rows_azure }}
+        </tbody>
+    </table>
+    <h3>Azure Complaince Percent = {{ compliance_percent_azure }} / 100</h3>
+</section>
+
+<section>
+    <h2>Extra Details</h2>
+    <p>
+    {{ detailed_findings_azure }}
+    </p>
+</section>
+
+<section>
+    <h2>Recommendations</h2>
+    <p>
+        Some areas passed, some could use a bit of fixing.
+    <ul>
+        <li>Deploy Azure Firewall to enforce perimeter-level traffic control.</li>
+        <li>Enable Azure Bastion for secure, browser-based RDP/SSH access to VMs.</li>
+        <li>Implement regular snapshot/backup policies for critical virtual machines.</li>
+        <li>Enable VM and VNET Encryption</li>
+        <li>Limit permissions of users, ensuring principle of least privilege</li>
+        <li>Implement Network Segmentation across all resources</li>
+        <li>Implement NSG's to further protect resources</li>
+    </ul>
+
+    </p>
+</section>
+
+
+<footer>
+    {{ year }} Ciaran O Brien - MTU Master in CyberSecuirty
+</footer>
+
+</body>
+
+
+
+
+
+
 </html>
+
